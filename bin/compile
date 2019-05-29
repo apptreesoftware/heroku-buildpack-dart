@@ -1,6 +1,66 @@
 #!/usr/bin/env bash
 # bin/compile <build-dir> <cache-dir> <env-dir>
 
+#!/bin/bash
+
+echo "-----> Install sassc v3.1.0"
+
+BUILD_DIR=$1
+CACHE_DIR="$2/sassc"
+LIBSASS_DIR="$CACHE_DIR/libsass"
+SASSC_DIR="$CACHE_DIR/sassc"
+INSTALL_PATH=".heroku/sassc"
+INSTALL_DIR="$BUILD_DIR/$INSTALL_PATH"
+PROFILE_DIR="$BUILD_DIR/.profile.d"
+
+indent() {
+    sed -u 's/^/       /'
+}
+
+printlog() {
+    echo $1 | indent
+}
+
+run_silent() {
+    $1 > /dev/null 2>&1
+}
+
+mkdir -p $CACHE_DIR
+
+if [[ ! -d "$LIBSASS_DIR/.git" ]]; then
+    printlog "Downloading libsass"
+    run_silent "git clone https://github.com/sass/libsass.git $LIBSASS_DIR"
+fi
+cd $LIBSASS_DIR
+run_silent "git checkout 3.1.0"
+printlog "Building libsass"
+run_silent "make static"
+
+if [[ ! -d "$SASSC_DIR/.git" ]]; then
+    printlog "Downloading sassc"
+    run_silent "git clone https://github.com/sass/sassc.git $SASSC_DIR"
+fi
+cd $SASSC_DIR
+run_silent "git checkout 3.1.0"
+printlog "Building sassc"
+SASS_LIBSASS_PATH=$LIBSASS_DIR make build-static
+
+printlog "Installing sassc to:"
+echo $PATH
+
+mkdir -p $INSTALL_DIR/bin
+cp $SASSC_DIR/bin/sassc $INSTALL_DIR/bin/sassc
+
+
+mkdir -p $PROFILE_DIR
+echo "export PATH=\$PATH:\$HOME/$INSTALL_PATH/bin" > $PROFILE_DIR/sassc.sh
+
+printlog "Acquiring runtime path"
+export PATH="$PATH:$SASSC_DIR/bin"
+
+printlog "Ensuring we have sassc"
+sassc --version
+
 # fail fast
 set -e
 #set -x
@@ -88,7 +148,24 @@ message "-----> Dart reports version: $CAN_DART_RUN"
 
 cd $BUILD_DIR
 
-for filename in `find . -name pubspec.yaml | grep -v dart-sdk | grep -v pub-cache`; do
+message "-----> Add Dart To Path"
+echo "export PATH=$PATH:/app/dart-sdk/bin"
+
+message "-----> Check Env Variables: PORT, DART_ENV, INDEX_TRANSFORMER_TAG"
+echo $PORT
+echo $DART_ENV
+echo $INDEX_TRANSFORMER_TAG
+
+DART_FIND_DIR=.
+if [ -z ${DART_BUILD_DIR_OVERRIDE+x} ];
+then
+    echo "DART_BUILD_DIR_OVERRIDE is unset";
+else
+    echo "DART_BUILD_DIR_OVERRIDE is set to '$DART_BUILD_DIR_OVERRIDE'";
+    DART_FIND_DIR=$DART_BUILD_DIR_OVERRIDE
+fi
+
+for filename in `find $DART_FIND_DIR -name pubspec.yaml | grep -v dart-sdk | grep -v pub-cache`; do
     pub_dir=`dirname $filename`
     message "*** Found pubspec.yaml in $BUILD_DIR/$pub_dir"
     cd $BUILD_DIR/$pub_dir
@@ -100,19 +177,15 @@ for filename in `find . -name pubspec.yaml | grep -v dart-sdk | grep -v pub-cach
     #start pub from the /app folder to have correct symlink paths
     /app/dart-sdk/bin/pub get
 
-    if [ -d "web" ]
+    message "*** Running pub build"
+
+    if [[ -z "$DART_BUILD_CMD" ]]
     then
-        message "*** Running pub build"
-        if [[ -z "$DART_BUILD_CMD" ]]
-        then
-            message 'Building with "pub build"'
-            /app/dart-sdk/bin/pub build
-        else
-            message "Building with \"$DART_BUILD_CMD\""
-            eval $DART_BUILD_CMD
-        fi
+        message 'Building with "pub build"'
+        /app/dart-sdk/bin/pub build
     else
-        message '*** Skipping pub build because "web" folder not found'
+        message "Building with \"$DART_BUILD_CMD\""
+        eval $DART_BUILD_CMD
     fi
 
 done
